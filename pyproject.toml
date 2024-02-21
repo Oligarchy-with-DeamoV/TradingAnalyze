@@ -1,0 +1,31 @@
+[build-system]
+requires = [ "poetry-core>=1.0.4",]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "trading_analyze"
+version = "0.0.1"
+description = "Test"
+authors = [ "Vincent Duan <vincent.duan95@outlook.com>",]
+maintainers = [ "Vincent Duan <vincent.duan95@outlook.com>",]
+repository = "https://github.com/Duan-JM/TradingAnalyze"
+classifiers = [ "Development Status :: 5 - Production/Stable", "Intended Audience :: Developers", "License :: OSI Approved :: Apache Software License", "Topic :: Software Development :: Libraries",]
+keywords = [ "tools"]
+include = [ "LICENSE", "README.md"]
+readme = "README.md"
+license = "Apache-2.0"
+
+[tool.poetry.scripts]
+trading_analyze = "trading_analyze.run:run_entry"
+
+[tool.poetry.dependencies]
+python = ">=3.8,<4"
+pandas = ">=2.0.3"
+structlog = "24.1.0"
+structlog_sentry = ">=2.0.3"
+
+[tool.pytest.ini_options]
+pythonpath = "src"
+addopts = [
+    "--import-mode=importlib",
+]
