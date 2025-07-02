@@ -1,9 +1,20 @@
-import argparse
-from .main import main
+import click
+
+from .cli import data_cli, factor_cli, trading_cli
+
+
+@click.group()
+def main():
+    """TradingAnalyze - 交易分析和因子挖掘工具。"""
+    pass
+
+
+# 添加子命令组
+main.add_command(data_cli, name="data")
+main.add_command(factor_cli, name="factor") 
+main.add_command(trading_cli, name="trading")
 
 
 def run_entry():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--csv_file_path", help="IBKR bill path")
-    args = parser.parse_args()
-    main(csv_file_path=args.csv_file_path)
+    """程序入口点。"""
+    main()
