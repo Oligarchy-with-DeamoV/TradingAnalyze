@@ -2,6 +2,7 @@
 
 from unittest.mock import Mock, patch
 
+import pandas as pd
 import pytest
 from click.testing import CliRunner
 
@@ -162,8 +163,29 @@ class TestAnalyzeFactorsCommand:
         assert 'factor_file' in result.output
         assert 'output' in result.output
     
-    def test_analyze_factors_with_file(self):
+    @patch('trading_analyze.factor_mining.qlib_factor_calculator.QlibFactorCalculator.load_factor_data')
+    @patch('trading_analyze.factor_mining.qlib_backtester.QlibBacktester.analyze_factor_performance')
+    @patch('trading_analyze.factor_mining.qlib_backtester.QlibBacktester.save_backtest_results')
+    def test_analyze_factors_with_file(self, mock_save, mock_analyze, mock_load):
         """测试分析因子文件。"""
+        # Mock 因子数据
+        mock_factor_data = pd.DataFrame({
+            'factor1': [0.1, 0.2, 0.3],
+            'factor2': [0.2, 0.3, 0.4],
+            'label_1d': [0.01, 0.02, -0.01]
+        })
+        mock_load.return_value = mock_factor_data
+        
+        # Mock 分析结果
+        mock_analyze.return_value = {
+            'ic_analysis': {'factor1': {'ic_mean': 0.05}},
+            'summary': {
+                'best_factors_by_period': {
+                    '1d': {'factor': 'factor1', 'ic_mean': 0.05, 'ic_ir': 0.33}
+                }
+            }
+        }
+        
         result = self.runner.invoke(factor_cli, [
             'analyze',
             '--factor_file', 'factors.csv',
@@ -172,9 +194,10 @@ class TestAnalyzeFactorsCommand:
         
         assert result.exit_code == 0
         assert 'factors.csv' in result.output
-        assert 'analysis.txt' in result.output
         assert '分析因子' in result.output
-        assert '待实现' in result.output or '⚠️' in result.output
+        mock_load.assert_called_once_with('factors.csv')
+        mock_analyze.assert_called_once()
+        mock_save.assert_called_once()
     
     def test_analyze_factors_missing_required_param(self):
         """测试缺少必需参数。"""

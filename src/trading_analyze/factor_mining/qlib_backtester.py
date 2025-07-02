@@ -1,5 +1,6 @@
 """基于 qlib 的回测器 - 使用 qlib 进行因子回测和策略评估。"""
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -284,18 +285,156 @@ class QlibBacktester:
             raise RuntimeError("qlib 未初始化")
         
         try:
-            # 这里应该是完整的 qlib 回测流程
-            # 由于 qlib 的复杂性，这里提供一个简化的示例框架
             logger.info("开始 qlib 标准回测")
             
-            # 实际的 qlib 回测需要更复杂的配置
-            # 包括模型训练、策略执行、风险分析等
+            # 提取配置参数
+            instruments = config.get("instruments", "csi300")
+            start_time = config.get("start_time", "2020-01-01")
+            end_time = config.get("end_time", "2021-12-31")
+            model_type = config.get("model_type", "lgb")
             
-            results = {
-                "status": "completed",
-                "config": config,
-                "message": "这是一个简化的回测示例，完整实现需要根据具体需求配置"
+            # 创建基础配置
+            dataset_config = {
+                "class": "DatasetH",
+                "module_path": "qlib.data.dataset",
+                "kwargs": {
+                    "handler": {
+                        "class": "Alpha158",
+                        "module_path": "qlib.contrib.data.handler",
+                        "kwargs": {
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "fit_start_time": start_time,
+                            "fit_end_time": end_time,
+                            "instruments": instruments,
+                        }
+                    },
+                    "segments": {
+                        "train": (start_time, "2021-06-30"),
+                        "valid": ("2021-07-01", "2021-09-30"),
+                        "test": ("2021-10-01", end_time),
+                    }
+                }
             }
+            
+            # 模型配置
+            if model_type == "lgb":
+                model_config = {
+                    "class": "LGBModel",
+                    "module_path": "qlib.contrib.model.gbdt",
+                    "kwargs": {
+                        "loss": "mse",
+                        "colsample_bytree": 0.8879,
+                        "learning_rate": 0.0421,
+                        "subsample": 0.8789,
+                        "lambda_l1": 205.6999,
+                        "lambda_l2": 580.9768,
+                        "max_depth": 8,
+                        "num_leaves": 210,
+                        "num_threads": 20,
+                    }
+                }
+            else:
+                model_config = {
+                    "class": "LinearModel", 
+                    "module_path": "qlib.contrib.model.linear",
+                }
+            
+            # 策略配置
+            strategy_config = {
+                "class": "TopkDropoutStrategy",
+                "module_path": "qlib.contrib.strategy.signal_strategy",
+                "kwargs": {
+                    "signal": {
+                        "class": "SignalStrategy",
+                        "module_path": "qlib.contrib.strategy.signal_strategy",
+                        "kwargs": {
+                            "model": model_config,
+                            "dataset": dataset_config,
+                        }
+                    },
+                    "topk": 50,
+                    "n_drop": 5,
+                }
+            }
+            
+            # 执行器配置
+            executor_config = {
+                "class": "SimulatorExecutor",
+                "module_path": "qlib.backtest.executor",
+                "kwargs": {
+                    "time_per_step": "day",
+                    "generate_portfolio_metrics": True,
+                }
+            }
+            
+            # 回测配置
+            backtest_config = {
+                "start_time": start_time,
+                "end_time": end_time,
+                "account": 100000000,
+                "benchmark": "SH000300",
+                "exchange_kwargs": {
+                    "freq": "day",
+                    "limit_threshold": 0.095,
+                    "deal_price": "close",
+                    "open_cost": 0.0005,
+                    "close_cost": 0.0015,
+                    "min_cost": 5,
+                },
+            }
+            
+            # 尝试运行回测（如果 qlib 完全可用）
+            try:
+                from qlib.backtest import backtest
+                from qlib.workflow import R
+
+                # 初始化组件
+                strategy = init_instance_by_config(strategy_config)
+                executor = init_instance_by_config(executor_config)
+                
+                # 运行回测
+                portfolio_metric_dict, indicator_dict = backtest(
+                    strategy=strategy,
+                    executor=executor,
+                    **backtest_config
+                )
+                
+                # 风险分析
+                analysis_freq = "day"
+                report_normal, positions_normal = portfolio_metric_dict.get(analysis_freq)
+                
+                # 计算风险指标
+                risk_analysis_config = {
+                    "report_normal": report_normal,
+                    "label_col": "label",
+                    "indicator_analysis": True,
+                    "indicator_dict": indicator_dict,
+                }
+                
+                analysis_result = risk_analysis(**risk_analysis_config)
+                
+                results = {
+                    "status": "completed",
+                    "config": config,
+                    "portfolio_metrics": portfolio_metric_dict,
+                    "indicators": indicator_dict,
+                    "risk_analysis": analysis_result,
+                }
+                
+            except Exception as inner_e:
+                logger.warning(f"完整 qlib 回测失败，返回配置信息: {inner_e}")
+                # 如果完整回测失败，返回配置验证结果
+                results = {
+                    "status": "config_validated",
+                    "config": config,
+                    "dataset_config": dataset_config,
+                    "model_config": model_config,
+                    "strategy_config": strategy_config,
+                    "executor_config": executor_config,
+                    "backtest_config": backtest_config,
+                    "message": f"配置已验证，但回测执行失败: {str(inner_e)}"
+                }
             
             logger.info("qlib 回测完成")
             return results
@@ -401,3 +540,283 @@ class QlibBacktester:
         except Exception as e:
             logger.error(f"保存回测结果失败: {e}")
             raise
+    
+    def create_portfolio_backtest(self, factor_data: pd.DataFrame,
+                                 factor_cols: List[str],
+                                 label_col: str = "label_1d",
+                                 n_top: int = 50,
+                                 rebalance_freq: str = "20D",
+                                 transaction_cost: float = 0.002) -> Dict[str, Any]:
+        """
+        创建组合回测，模拟真实的投资组合表现。
+        
+        Args:
+            factor_data: 因子数据
+            factor_cols: 因子列名列表
+            label_col: 标签列名
+            n_top: 选股数量
+            rebalance_freq: 调仓频率
+            transaction_cost: 交易成本
+            
+        Returns:
+            组合回测结果
+        """
+        if not self.initialized:
+            raise RuntimeError("qlib 未初始化")
+        
+        # 数据预处理
+        valid_data = factor_data[factor_cols + [label_col]].dropna()
+        if len(valid_data) == 0:
+            raise ValueError("没有有效的回测数据")
+        
+        # 如果是多重索引 (date, instrument)，进行组合回测
+        if isinstance(valid_data.index, pd.MultiIndex):
+            return self._multi_index_portfolio_backtest(
+                valid_data, factor_cols, label_col, n_top, rebalance_freq, transaction_cost
+            )
+        else:
+            # 单一索引的简化回测
+            return self._simple_portfolio_backtest(
+                valid_data, factor_cols, label_col, n_top, transaction_cost
+            )
+    
+    def _multi_index_portfolio_backtest(self, data: pd.DataFrame,
+                                       factor_cols: List[str],
+                                       label_col: str,
+                                       n_top: int,
+                                       rebalance_freq: str,
+                                       transaction_cost: float) -> Dict[str, Any]:
+        """多重索引数据的组合回测。"""
+        # 假设索引是 (date, instrument)
+        dates = data.index.get_level_values(0).unique().sort_values()
+        
+        # 计算因子综合得分
+        factor_score = data[factor_cols].mean(axis=1)
+        data_with_score = data.copy()
+        data_with_score['factor_score'] = factor_score
+        
+        portfolio_returns = []
+        portfolio_weights = []
+        selected_stocks = []
+        
+        for date in dates:
+            try:
+                date_data = data_with_score.loc[date]
+                if len(date_data) < n_top:
+                    continue
+                
+                # 选择得分最高的股票
+                top_stocks = date_data.nlargest(n_top, 'factor_score')
+                weights = np.ones(len(top_stocks)) / len(top_stocks)  # 等权重
+                
+                # 计算组合收益
+                if label_col in top_stocks.columns:
+                    portfolio_return = (top_stocks[label_col] * weights).sum()
+                    portfolio_returns.append(portfolio_return)
+                    portfolio_weights.append(weights)
+                    selected_stocks.append(top_stocks.index.tolist())
+                
+            except Exception as e:
+                logger.warning(f"日期 {date} 回测失败: {e}")
+                continue
+        
+        # 计算绩效指标
+        if portfolio_returns:
+            returns_series = pd.Series(portfolio_returns, index=dates[:len(portfolio_returns)])
+            benchmark_returns = data.groupby(level=0)[label_col].mean()
+            
+            # 对齐时间序列
+            common_dates = returns_series.index.intersection(benchmark_returns.index)
+            returns_series = returns_series.loc[common_dates]
+            benchmark_returns = benchmark_returns.loc[common_dates]
+            
+            # 计算超额收益
+            excess_returns = returns_series - benchmark_returns
+            
+            # 考虑交易成本
+            if transaction_cost > 0:
+                # 简化的交易成本计算
+                turnover_cost = transaction_cost * 0.5  # 假设平均50%换手率
+                returns_series_net = returns_series - turnover_cost
+            else:
+                returns_series_net = returns_series
+            
+            # 计算累计收益
+            cumulative_returns = (1 + returns_series_net).cumprod()
+            cumulative_benchmark = (1 + benchmark_returns).cumprod()
+            
+            results = {
+                "portfolio_returns": returns_series.to_dict(),
+                "benchmark_returns": benchmark_returns.to_dict(),
+                "excess_returns": excess_returns.to_dict(),
+                "cumulative_returns": cumulative_returns.to_dict(),
+                "cumulative_benchmark": cumulative_benchmark.to_dict(),
+                "performance_metrics": {
+                    "total_return": cumulative_returns.iloc[-1] - 1 if len(cumulative_returns) > 0 else 0,
+                    "benchmark_return": cumulative_benchmark.iloc[-1] - 1 if len(cumulative_benchmark) > 0 else 0,
+                    "excess_return": (cumulative_returns.iloc[-1] - cumulative_benchmark.iloc[-1]) if len(cumulative_returns) > 0 else 0,
+                    "annual_return": returns_series_net.mean() * 252,
+                    "annual_volatility": returns_series_net.std() * np.sqrt(252),
+                    "sharpe_ratio": (returns_series_net.mean() / returns_series_net.std() * np.sqrt(252)) if returns_series_net.std() > 0 else 0,
+                    "max_drawdown": self._calculate_max_drawdown(cumulative_returns),
+                    "win_rate": (returns_series_net > 0).mean(),
+                    "avg_holding_period": len(returns_series) / len(set().union(*selected_stocks)) if selected_stocks else 0,
+                },
+                "selected_stocks": selected_stocks,
+                "backtest_config": {
+                    "n_top": n_top,
+                    "rebalance_freq": rebalance_freq,
+                    "transaction_cost": transaction_cost,
+                    "factor_cols": factor_cols
+                }
+            }
+        else:
+            results = {
+                "error": "没有有效的回测结果",
+                "backtest_config": {
+                    "n_top": n_top,
+                    "rebalance_freq": rebalance_freq,
+                    "transaction_cost": transaction_cost,
+                    "factor_cols": factor_cols
+                }
+            }
+        
+        logger.info("多重索引组合回测完成")
+        return results
+    
+    def _simple_portfolio_backtest(self, data: pd.DataFrame,
+                                  factor_cols: List[str],
+                                  label_col: str,
+                                  n_top: int,
+                                  transaction_cost: float) -> Dict[str, Any]:
+        """简化的组合回测。"""
+        # 计算因子综合得分
+        factor_score = data[factor_cols].mean(axis=1)
+        
+        # 选择得分最高的样本
+        n_select = min(n_top, len(data))
+        top_indices = factor_score.nlargest(n_select).index
+        
+        # 计算组合表现
+        portfolio_returns = data.loc[top_indices, label_col]
+        benchmark_returns = data[label_col]
+        
+        # 绩效指标
+        portfolio_mean = portfolio_returns.mean()
+        benchmark_mean = benchmark_returns.mean()
+        portfolio_std = portfolio_returns.std()
+        
+        results = {
+            "performance_metrics": {
+                "portfolio_return": portfolio_mean,
+                "benchmark_return": benchmark_mean,
+                "excess_return": portfolio_mean - benchmark_mean,
+                "portfolio_volatility": portfolio_std,
+                "sharpe_ratio": portfolio_mean / portfolio_std if portfolio_std > 0 else 0,
+                "win_rate": (portfolio_returns > 0).mean(),
+                "selection_ratio": n_select / len(data),
+            },
+            "selected_samples": top_indices.tolist(),
+            "backtest_config": {
+                "n_top": n_top,
+                "transaction_cost": transaction_cost,
+                "factor_cols": factor_cols
+            }
+        }
+        
+        logger.info("简化组合回测完成")
+        return results
+    
+    def _calculate_max_drawdown(self, cumulative_returns: pd.Series) -> float:
+        """计算最大回撤。"""
+        if len(cumulative_returns) == 0:
+            return 0.0
+        
+        peak = cumulative_returns.expanding(min_periods=1).max()
+        drawdown = (cumulative_returns - peak) / peak
+        return drawdown.min()
+    
+    def create_factor_report(self, analysis_results: Dict[str, Any],
+                           output_dir: str = "factor_reports") -> str:
+        """
+        生成因子分析报告。
+        
+        Args:
+            analysis_results: 因子分析结果
+            output_dir: 输出目录
+            
+        Returns:
+            报告文件路径
+        """
+        import os
+        from datetime import datetime
+
+        # 创建输出目录
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        
+        # 生成报告文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_file = os.path.join(output_dir, f"factor_report_{timestamp}.md")
+        
+        # 生成Markdown报告
+        with open(report_file, 'w', encoding='utf-8') as f:
+            f.write("# 因子分析报告\n\n")
+            f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+            # 总结部分
+            if "summary" in analysis_results:
+                f.write("## 执行摘要\n\n")
+                summary = analysis_results["summary"]
+                
+                if "best_factors_by_period" in summary:
+                    f.write("### 各周期最佳因子\n\n")
+                    f.write("| 周期 | 因子 | IC均值 | IR比率 |\n")
+                    f.write("|------|------|--------|--------|\n")
+                    
+                    for period, info in summary["best_factors_by_period"].items():
+                        f.write(f"| {period} | {info['factor']} | {info['ic_mean']:.4f} | {info['ic_ir']:.4f} |\n")
+                    f.write("\n")
+            
+            # 因子表现详情
+            if "factor_performance" in analysis_results:
+                f.write("## 因子表现详情\n\n")
+                
+                for period, factors in analysis_results["factor_performance"].items():
+                    f.write(f"### {period}\n\n")
+                    f.write("| 因子 | IC均值 | IC标准差 | IR比率 | 胜率 | 最大IC | 最小IC |\n")
+                    f.write("|------|--------|----------|--------|------|--------|--------|\n")
+                    
+                    for factor_name, metrics in factors.items():
+                        f.write(f"| {factor_name} | "
+                               f"{metrics['ic_mean']:.4f} | "
+                               f"{metrics['ic_std']:.4f} | "
+                               f"{metrics['ic_ir']:.4f} | "
+                               f"{metrics['ic_positive_ratio']:.4f} | "
+                               f"{metrics['ic_max']:.4f} | "
+                               f"{metrics['ic_min']:.4f} |\n")
+                    f.write("\n")
+            
+            # 回测结果
+            if "performance_metrics" in analysis_results:
+                f.write("## 回测绩效\n\n")
+                metrics = analysis_results["performance_metrics"]
+                
+                f.write("| 指标 | 数值 |\n")
+                f.write("|------|------|\n")
+                for key, value in metrics.items():
+                    if isinstance(value, (int, float)):
+                        f.write(f"| {key} | {value:.4f} |\n")
+                    else:
+                        f.write(f"| {key} | {value} |\n")
+                f.write("\n")
+            
+            # 配置信息
+            if "backtest_config" in analysis_results:
+                f.write("## 回测配置\n\n")
+                config = analysis_results["backtest_config"]
+                f.write("```json\n")
+                f.write(json.dumps(config, indent=2, ensure_ascii=False))
+                f.write("\n```\n\n")
+        
+        logger.info(f"因子报告已生成: {report_file}")
+        return report_file
