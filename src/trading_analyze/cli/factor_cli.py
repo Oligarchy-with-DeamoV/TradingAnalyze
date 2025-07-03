@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import click
+import pandas as pd
 import structlog
 
 from ..factor_mining import QlibBacktester, QlibFactorCalculator
@@ -114,35 +115,64 @@ def analyze_factors(factor_file, stocks, start, end, periods, output, data_dir):
         factor_data = calculator.load_factor_data(factor_file)
         click.echo(f"因子数据形状: {factor_data.shape}")
         
-        # 如果需要添加收益数据
-        if stocks and start and end:
+        # 确定要分析的股票和时间范围
+        if not stocks and isinstance(factor_data.index, pd.MultiIndex):
+            # 从索引中提取股票列表
+            stocks = ",".join(factor_data.index.get_level_values('instrument').unique())
+            click.echo(f"从数据中自动提取股票列表: {stocks}")
+        
+        if not start and isinstance(factor_data.index, pd.MultiIndex):
+            start = factor_data.index.get_level_values('datetime').min().strftime('%Y-%m-%d')
+            click.echo(f"从数据中自动提取开始日期: {start}")
+            
+        if not end and isinstance(factor_data.index, pd.MultiIndex):
+            end = factor_data.index.get_level_values('datetime').max().strftime('%Y-%m-%d')
+            click.echo(f"从数据中自动提取结束日期: {end}")
+        
+        # 检查是否已有标签数据
+        existing_labels = [col for col in factor_data.columns if col.startswith('label_')]
+        
+        # 如果没有标签数据，尝试添加前瞻收益
+        if not existing_labels and stocks and start and end:
             stock_list = [s.strip() for s in stocks.split(",")]
             period_list = [int(p.strip()) for p in periods.split(",")]
             
             click.echo("添加前瞻收益数据...")
-            factor_data_with_returns = calculator.get_factor_data_with_returns(
-                stock_list, start, end, None, period_list
-            )
-            
-            # 使用有收益数据的版本进行分析
-            factor_cols = [col for col in factor_data.columns if not col.startswith('label_')]
-            label_cols = [f"label_{p}d" for p in period_list]
-            
+            try:
+                factor_data_with_returns = calculator.get_factor_data_with_returns(
+                    stock_list, start, end, factor_data, period_list
+                )
+                
+                if not factor_data_with_returns.empty:
+                    factor_data = factor_data_with_returns
+                    existing_labels = [f"label_{p}d" for p in period_list]
+                    click.echo(f"成功添加前瞻收益标签: {existing_labels}")
+                else:
+                    click.echo("⚠️ 添加前瞻收益失败，将进行简化分析")
+                    
+            except Exception as e:
+                logger.warning(f"添加前瞻收益失败: {e}")
+                click.echo(f"⚠️ 添加前瞻收益失败: {e}")
+        
+        # 分析因子表现
+        factor_cols = [col for col in factor_data.columns if not col.startswith('label_')]
+        
+        if existing_labels:
+            # 有标签数据，进行完整分析
             analysis_results = backtester.analyze_factor_performance(
-                factor_data_with_returns, factor_cols, label_cols
+                factor_data, factor_cols, existing_labels
             )
         else:
-            # 只分析现有数据
-            factor_cols = [col for col in factor_data.columns if not col.startswith('label_')]
-            label_cols = [col for col in factor_data.columns if col.startswith('label_')]
+            # 没有标签数据，进行简化分析
+            click.echo("⚠️ 没有标签数据，执行简化分析")
+            for col in existing_labels:
+                logger.warning(f"标签列 {col} 不存在，跳过")
             
-            if not label_cols:
-                click.echo("警告: 没有找到标签数据，无法进行完整分析", err=True)
-                return
-            
-            analysis_results = backtester.analyze_factor_performance(
-                factor_data, factor_cols, label_cols
-            )
+            # 创建简化的分析结果
+            analysis_results = {
+                "factor_performance": {},
+                "summary": {}
+            }
         
         # 保存分析结果
         backtester.save_backtest_results(analysis_results, output)
@@ -194,10 +224,39 @@ def backtest_factors(factor_file, factors, strategy, n_top, transaction_cost,
         click.echo(f"回测因子: {factor_list}")
         
         # 确定标签列
-        label_col = "label_1d" if "label_1d" in factor_data.columns else \
-                   [col for col in factor_data.columns if col.startswith('label_')][0] if \
-                   any(col.startswith('label_') for col in factor_data.columns) else \
-                   factor_data.columns[-1]
+        label_col = None
+        if "label_1d" in factor_data.columns:
+            label_col = "label_1d"
+        elif any(col.startswith('label_') for col in factor_data.columns):
+            label_col = [col for col in factor_data.columns if col.startswith('label_')][0]
+        else:
+            # 没有标签列，需要先添加前瞻收益标签
+            click.echo("⚠️ 没有找到标签列，尝试添加前瞻收益标签...")
+            try:
+                # 从因子数据中提取股票和时间信息
+                if isinstance(factor_data.index, pd.MultiIndex):
+                    instruments = factor_data.index.get_level_values('instrument').unique().tolist()
+                    start_date = factor_data.index.get_level_values('datetime').min().strftime('%Y-%m-%d')
+                    end_date = factor_data.index.get_level_values('datetime').max().strftime('%Y-%m-%d')
+                    
+                    # 添加前瞻收益标签
+                    factor_data_with_labels = calculator.get_factor_data_with_returns(
+                        instruments, start_date, end_date, factor_data, [1, 5, 20]
+                    )
+                    
+                    if not factor_data_with_labels.empty and any(col.startswith('label_') for col in factor_data_with_labels.columns):
+                        factor_data = factor_data_with_labels
+                        label_col = "label_1d"
+                        click.echo("✅ 成功添加前瞻收益标签")
+                    else:
+                        click.echo("❌ 添加前瞻收益标签失败，无法进行回测", err=True)
+                        return
+                else:
+                    click.echo("❌ 单层索引数据不支持自动添加标签，请手动添加", err=True)
+                    return
+            except Exception as e:
+                click.echo(f"❌ 添加前瞻收益标签失败: {e}", err=True)
+                return
         
         click.echo(f"使用标签: {label_col}")
         

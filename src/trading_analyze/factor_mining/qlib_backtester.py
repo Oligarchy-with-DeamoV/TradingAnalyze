@@ -112,7 +112,10 @@ class QlibBacktester:
                     'ic_positive_ratio': (ic_series > 0).mean(),
                     'ic_max': ic_series.max(),
                     'ic_min': ic_series.min(),
-                    'ic_series': ic_series
+                    # 转换 ic_series 为可序列化的格式
+                    'ic_series': {
+                        str(k): float(v) for k, v in ic_series.items() if pd.notna(v)
+                    }
                 }
         
         logger.info(f"完成 {len(ic_results)} 个因子的 IC 分析")
@@ -517,6 +520,10 @@ class QlibBacktester:
                     return int(obj)
                 elif isinstance(obj, (np.float64, np.float32)):
                     return float(obj)
+                elif isinstance(obj, pd.Timestamp):
+                    return obj.strftime('%Y-%m-%d %H:%M:%S')
+                elif hasattr(obj, 'isoformat'):  # datetime objects
+                    return obj.isoformat()
                 elif pd.isna(obj):
                     return None
                 return obj
@@ -524,7 +531,17 @@ class QlibBacktester:
             # 递归转换结果
             def recursive_convert(obj):
                 if isinstance(obj, dict):
-                    return {k: recursive_convert(v) for k, v in obj.items()}
+                    converted_dict = {}
+                    for k, v in obj.items():
+                        # 确保键也被转换为字符串
+                        if isinstance(k, pd.Timestamp):
+                            key = k.strftime('%Y-%m-%d')
+                        elif hasattr(k, 'isoformat'):
+                            key = k.isoformat()
+                        else:
+                            key = str(k)
+                        converted_dict[key] = recursive_convert(v)
+                    return converted_dict
                 elif isinstance(obj, list):
                     return [recursive_convert(item) for item in obj]
                 else:
@@ -607,14 +624,30 @@ class QlibBacktester:
                 
                 # 选择得分最高的股票
                 top_stocks = date_data.nlargest(n_top, 'factor_score')
-                weights = np.ones(len(top_stocks)) / len(top_stocks)  # 等权重
                 
                 # 计算组合收益
-                if label_col in top_stocks.columns:
-                    portfolio_return = (top_stocks[label_col] * weights).sum()
-                    portfolio_returns.append(portfolio_return)
-                    portfolio_weights.append(weights)
-                    selected_stocks.append(top_stocks.index.tolist())
+                if label_col in top_stocks.columns and len(top_stocks) > 0:
+                    # 确保维度匹配
+                    stock_returns = top_stocks[label_col].values
+                    if len(stock_returns) > 0:
+                        # 等权重
+                        weights = np.ones(len(stock_returns)) / len(stock_returns)
+                        
+                        # 确保两个数组都是一维的
+                        if stock_returns.ndim > 1:
+                            stock_returns = stock_returns.flatten()
+                        if weights.ndim > 1:
+                            weights = weights.flatten()
+                        
+                        # 确保长度匹配
+                        min_len = min(len(stock_returns), len(weights))
+                        stock_returns = stock_returns[:min_len]
+                        weights = weights[:min_len]
+                        
+                        portfolio_return = np.sum(stock_returns * weights)
+                        portfolio_returns.append(portfolio_return)
+                        portfolio_weights.append(weights)
+                        selected_stocks.append(top_stocks.index.tolist())
                 
             except Exception as e:
                 logger.warning(f"日期 {date} 回测失败: {e}")

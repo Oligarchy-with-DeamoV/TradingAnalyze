@@ -1,6 +1,7 @@
 """数据下载器 - 从各种数据源下载股票数据。"""
 
 import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -52,42 +53,59 @@ class DataDownloader:
         failed_symbols = []
         
         for symbol in symbols:
-            try:
-                logger.info("下载股票数据", symbol=symbol)
-                ticker = yf.Ticker(symbol)
-                data = ticker.history(
-                    start=start_date,
-                    end=end_date,
-                    interval=interval,
-                    auto_adjust=True,  # 自动调整分红配股
-                    prepost=False,     # 不包含盘前盘后
-                    threads=True
-                )
-                
-                if data.empty:
-                    logger.warning("无数据", symbol=symbol)
-                    failed_symbols.append(symbol)
-                    continue
+            max_retries = 3
+            retry_delay = 2  # 秒
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.info("下载股票数据", symbol=symbol, attempt=attempt+1)
+                    ticker = yf.Ticker(symbol)
+                    data = ticker.history(
+                        start=start_date,
+                        end=end_date,
+                        interval=interval,
+                        auto_adjust=True,  # 自动调整分红配股
+                        prepost=False     # 不包含盘前盘后
+                    )
                     
-                # 清理数据
-                data = data.dropna()
-                data.index.name = "date"
-                
-                # 重命名列为标准格式
-                data.columns = [col.lower() for col in data.columns]
-                if 'adj close' in data.columns:
-                    data = data.drop(columns=['adj close'])
+                    if data.empty:
+                        logger.warning("无数据", symbol=symbol)
+                        failed_symbols.append(symbol)
+                        break
+                        
+                    # 清理数据
+                    data = data.dropna()
+                    data.index.name = "date"
                     
-                results[symbol] = data
-                
-                # 保存到文件
-                output_file = self.output_dir / f"{symbol}_{start_date}_{end_date}.csv"
-                data.to_csv(output_file)
-                logger.info("数据已保存", symbol=symbol, file=str(output_file), records=len(data))
-                
-            except Exception as e:
-                logger.error("下载失败", symbol=symbol, error=str(e))
-                failed_symbols.append(symbol)
+                    # 重命名列为标准格式
+                    data.columns = [col.lower() for col in data.columns]
+                    if 'adj close' in data.columns:
+                        data = data.drop(columns=['adj close'])
+                        
+                    results[symbol] = data
+                    
+                    # 保存到文件
+                    output_file = self.output_dir / f"{symbol}_{start_date}_{end_date}.csv"
+                    data.to_csv(output_file)
+                    logger.info("数据已保存", symbol=symbol, file=str(output_file), records=len(data))
+                    break  # 成功，退出重试循环
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    if "rate limit" in error_msg.lower() or "too many requests" in error_msg.lower():
+                        if attempt < max_retries - 1:
+                            logger.warning("遇到限流，等待重试", symbol=symbol, attempt=attempt+1, delay=retry_delay)
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # 指数退避
+                            continue
+                    
+                    logger.error("下载失败", symbol=symbol, error=error_msg, attempt=attempt+1)
+                    if attempt == max_retries - 1:
+                        failed_symbols.append(symbol)
+            
+            # 请求间添加小延迟避免限流
+            if len(symbols) > 1:
+                time.sleep(1)
                 
         if failed_symbols:
             logger.warning("部分股票下载失败", failed_symbols=failed_symbols)
