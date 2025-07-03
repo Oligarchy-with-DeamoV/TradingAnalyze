@@ -37,7 +37,7 @@ class QlibBacktester:
             region: 市场区域
         """
         if not QLIB_AVAILABLE:
-            raise ImportError("qlib 未安装，请运行: pip install qlib")
+            raise ImportError("qlib 未安装，请运行: pip install pyqlib")
         
         self.provider_uri = provider_uri
         self.region = region

@@ -1,8 +1,7 @@
 {
-    "python.testing.pytestArgs": [
-        "tests"
-    ],
-    "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true,
-    "python.defaultInterpreterPath": "/Users/duan-jm/Library/Caches/pypoetry/virtualenvs/trading-analyze-L0ZLbl-x-py3.10/bin/python"
+  "python.testing.pytestArgs": ["tests"],
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestEnabled": true,
+  "python.defaultInterpreterPath": "/Users/duan-jm/Library/Caches/pypoetry/virtualenvs/trading-analyze-L0ZLbl-x-py3.10/bin/python",
+  "python.analysis.autoImportCompletions": true
 }
