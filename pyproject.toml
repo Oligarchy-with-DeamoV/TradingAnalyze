@@ -23,9 +23,31 @@ python = ">=3.8,<4"
 pandas = ">=2.0.3"
 structlog = "24.1.0"
 structlog_sentry = ">=2.0.3"
+click = ">=8.0.0"
+yfinance = ">=0.2.0"
+requests = ">=2.28.0"
+numpy = ">=1.20.0"
+scikit-learn = ">=1.0.0"
+pyqlib = ">=0.9.6"
+joblib = "==1.4.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+pytest-cov = ">=4.0.0"
+pytest-mock = ">=3.10.0"
+pytest-click = ">=1.1.0"
 
 [tool.pytest.ini_options]
 pythonpath = "src"
+testpaths = ["tests"]
 addopts = [
     "--import-mode=importlib",
+    "--cov=src/trading_analyze",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "-v"
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning"
 ]

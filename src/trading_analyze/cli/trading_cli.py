@@ -1,15 +1,20 @@
+"""交易分析 CLI 命令。"""
+
+import click
+import structlog
+
+logger = structlog.get_logger()
+
 from io import StringIO
 from typing import Dict, List, Text
 
 import pandas as pd
 import structlog
 
-from .log_utils import configure_structlog
-
+from trading_analyze.log_utils import configure_structlog
 
 configure_structlog()
 structlogger = structlog.get_logger()
-
 
 def read_csv_to_dataframe(csv_file_path: str) -> pd.DataFrame:
     """读取 CSV 内容并将其转换为 DataFrame。"""
@@ -89,6 +94,25 @@ def fetch_data(
         raise ValueError
 
 
-def main(csv_file_path):
+def trading_main(csv_file_path):
     datas = fetch_data(csv_file_path, tables=["交易"], split_signal=",")
     fetch_trading_data(datas["交易"])
+
+@click.group()
+def trading_cli():
+    """交易分析相关命令。"""
+    pass
+
+
+@trading_cli.command("analyze")
+@click.option("--csv_file_path", required=True, help="IBKR 账单文件路径")
+def analyze_trading(csv_file_path):
+    """分析 IBKR 交易数据。"""
+    try:
+        click.echo(f"分析交易数据: {csv_file_path}")
+        trading_main(csv_file_path)
+        click.echo("✓ 交易分析完成")
+        
+    except Exception as e:
+        logger.error("交易分析失败", error=str(e))
+        click.echo(f"错误: {str(e)}", err=True)
